@@ -477,27 +477,143 @@ Rastgele oluşturulmuş bazı işlemlerle çalıştırın: `-s 1 -l 3:50,3:50` v
 
 #### Rastgele Süreç Analizi (`-s 1 -l 3:50,3:50`)
 
-  * **PID 0:** 3 talimat, %50 CPU. $\implies$ `io, io_done, cpu, io, io_done` (5 talimat)
-  * **PID 1:** 3 talimat, %50 CPU. $\implies$ `cpu, cpu, io, io_done, cpu` (5 talimat)
+Öncelikle `-s 1 -l 3:50,3:50` komutunun ürettiği süreçleri simülatör mantığına (Python `random` modülü seed=1 ile) göre belirleyelim:
 
-#### 1\. `-I IO_RUN_IMMEDIATE` vs. `-I IO_RUN_LATER` (Varsayılan: `-S SWITCH_ON_IO`)
+* **Süreç 0 (PID 0):** 3 Talimat, %50 CPU.
+    * *Üretilen:* `io`, `cpu`, `io` (Toplam 3 talimat + 2 `io_done` = 5 adım).
+    * *Sıra:* `io` (başlat) -> `io_done` -> `cpu` -> `io` (başlat) -> `io_done`.
+* **Süreç 1 (PID 1):** 3 Talimat, %50 CPU.
+    * *Üretilen:* `cpu`, `io`, `cpu` (Toplam 3 talimat + 1 `io_done` = 4 adım).
+    * *Sıra:* `cpu` -> `io` (başlat) -> `io_done` -> `cpu`.
 
-| Davranış | Toplam Zaman | CPU Kullanımı | IO Kullanımı | Yorum |
+* **Varsayılan G/Ç Süresi:** 5 birim (`-L 5`).
+
+---
+
+### 1. Senaryo: `-I IO_RUN_LATER` (ve `-S SWITCH_ON_IO`)
+
+G/Ç bittiğinde süreç `READY` kuyruğuna girer, mevcut çalışan süreci kesmez.
+
+* **T=1:** PID 0 `RUN:io` -> **BLOCKED**. G/Ç Bitiş: $1+5+1=7$. (Anahtarlama: PID 1)
+* **T=2:** PID 1 `RUN:cpu`.
+* **T=3:** PID 1 `RUN:io` -> **BLOCKED**. G/Ç Bitiş: $3+5+1=9$. (CPU Boş)
+* **T=4-6:** CPU Boş (Her iki süreç de BLOCKED).
+* **T=7:** PID 0 G/Ç Bitti (*). PID 0 -> `READY`. (CPU Boş olduğu için hemen çalışır).
+    * PID 0 `RUN:io_done`.
+* **T=8:** PID 0 `RUN:cpu`.
+* **T=9:** PID 1 G/Ç Bitti (*). PID 1 -> `READY`. (PID 0 çalışıyor, kesilmez).
+    * PID 0 `RUN:io` -> **BLOCKED**. G/Ç Bitiş: $9+5+1=15$. (Anahtarlama: PID 1).
+* **T=10:** PID 1 `RUN:io_done`.
+* **T=11:** PID 1 `RUN:cpu` -> **DONE**.
+* **T=12-14:** CPU Boş (PID 0 BLOCKED).
+* **T=15:** PID 0 G/Ç Bitti (*). PID 0 -> `READY`.
+    * PID 0 `RUN:io_done` -> **DONE**.
+
+**İstatistikler:**
+* **Toplam Zaman:** 15
+* **CPU Busy:** 6 (PID 0: `io, io_done, cpu, io, io_done` = 3 CPU kullanımı; PID 1: `cpu, io, io_done, cpu` = 3 CPU kullanımı. *Not: `io` ve `io_done` talimatları CPU zamanı harcar.*)
+    * PID 0: `io`(1) + `io_done`(1) + `cpu`(1) + `io`(1) + `io_done`(1) = 5
+    * PID 1: `cpu`(1) + `io`(1) + `io_done`(1) + `cpu`(1) = 4
+    * *Düzeltme:* Simülatörde `io` ve `io_done` komutları 1 clock harcar ve CPU busy sayılır.
+    * **Toplam CPU Busy:** $5 + 4 = 9$.
+* **IO Busy:** T=2-6 (5 birim, PID 0), T=4-8 (5 birim, PID 1), T=10-14 (5 birim, PID 0).
+    * Örtüşmeleri hesaba katalım:
+    * T=2,3,4,5,6 (PID 0 IO)
+    * T=4,5,6,7,8 (PID 1 IO)
+    * T=10,11,12,13,14 (PID 0 IO)
+    * Aktif IO zamanları: 2,3,4,5,6,7,8,10,11,12,13,14. **Toplam: 12 birim.**
+
+| Metrik | Değer | Oran |
+| :--- | :--- | :--- |
+| **Toplam Zaman** | **15** | - |
+| **CPU Kullanımı** | 9 | %60.00 |
+| **IO Kullanımı** | 12 | %80.00 |
+
+---
+
+### 2. Senaryo: `-I IO_RUN_IMMEDIATE` (ve `-S SWITCH_ON_IO`)
+
+G/Ç bittiğinde süreç **HEMEN** çalışır (preempt).
+
+* **T=1:** PID 0 `RUN:io` -> **BLOCKED**. G/Ç Bitiş: 7. (Switch -> PID 1)
+* **T=2:** PID 1 `RUN:cpu`.
+* **T=3:** PID 1 `RUN:io` -> **BLOCKED**. G/Ç Bitiş: 9. (CPU Boş).
+* **T=4-6:** CPU Boş.
+* **T=7:** PID 0 G/Ç Bitti (*). **IMMEDIATE** -> PID 0 `RUN:io_done`.
+* **T=8:** PID 0 `RUN:cpu`.
+* **T=9:** PID 1 G/Ç Bitti (*). **IMMEDIATE** (PID 0 Kesilir) -> PID 1 `RUN:io_done`.
+* **T=10:** PID 1 `RUN:cpu` -> **DONE**. (Switch -> PID 0).
+* **T=11:** PID 0 `RUN:io` -> **BLOCKED**. G/Ç Bitiş: $11+5+1=17$. (CPU Boş).
+* **T=12-16:** CPU Boş.
+* **T=17:** PID 0 G/Ç Bitti (*). **IMMEDIATE** -> PID 0 `RUN:io_done` -> **DONE**.
+
+**İstatistikler:**
+* **Toplam Zaman:** 17
+* **CPU Busy:** 9 (Yine 9 instruction çalıştı).
+* **IO Busy:**
+    * T=2-6 (PID 0)
+    * T=4-8 (PID 1)
+    * T=12-16 (PID 0)
+    * Birleşim: 2,3,4,5,6,7,8,12,13,14,15,16. **Toplam: 12 birim.**
+
+| Metrik | Değer | Oran |
+| :--- | :--- | :--- |
+| **Toplam Zaman** | **17** | - |
+| **CPU Kullanımı** | 9 | %52.94 |
+| **IO Kullanımı** | 12 | %70.59 |
+
+*Yorum:* Bu özel rastgele senaryoda `IMMEDIATE` daha yavaş oldu. Çünkü PID 1'in G/Ç'si bittiğinde (T=9), PID 0 tam G/Ç başlatmak üzereydi (T=11'de başlatabildi). Eğer PID 0 kesilmeseydi, G/Ç'yi T=9'da başlatacaktı ve G/Ç süreci daha erken bitecekti. `IMMEDIATE` bazen akışı bozarak süreyi uzatabilir.
+
+---
+
+### 3. Senaryo: `-S SWITCH_ON_END`
+
+Süreçler **sıralı** çalışır. Biri bitmeden diğeri başlamaz.
+
+* **T=1:** PID 0 `RUN:io` -> **BLOCKED**. (Switch YOK, PID 0 bekler).
+* **T=2-6:** PID 0 BLOCKED. CPU Boş.
+* **T=7:** G/Ç Bitti (*). PID 0 `RUN:io_done`.
+* **T=8:** PID 0 `RUN:cpu`.
+* **T=9:** PID 0 `RUN:io` -> **BLOCKED**.
+* **T=10-14:** PID 0 BLOCKED. CPU Boş.
+* **T=15:** G/Ç Bitti (*). PID 0 `RUN:io_done` -> **DONE**. (Switch -> PID 1).
+* **T=16:** PID 1 `RUN:cpu`.
+* **T=17:** PID 1 `RUN:io` -> **BLOCKED**.
+* **T=18-22:** PID 1 BLOCKED. CPU Boş.
+* **T=23:** G/Ç Bitti (*). PID 1 `RUN:io_done`.
+* **T=24:** PID 1 `RUN:cpu` -> **DONE**.
+
+**İstatistikler:**
+* **Toplam Zaman:** 24
+* **CPU Busy:** 9
+* **IO Busy:**
+    * T=2-6 (5 birim)
+    * T=10-14 (5 birim)
+    * T=18-22 (5 birim)
+    * Çakışma yok. **Toplam: 15 birim.**
+
+| Metrik | Değer | Oran |
+| :--- | :--- | :--- |
+| **Toplam Zaman** | **24** | - |
+| **CPU Kullanımı** | 9 | %37.50 |
+| **IO Kullanımı** | 15 | %62.50 |
+
+---
+
+### Özet Karşılaştırma Tablosu
+
+Aşağıdaki tablo, `-s 1 -l 3:50,3:50` komutu için trace analizine dayanmaktadır:
+
+| Konfigürasyon | Toplam Zaman | CPU Kullanımı | IO Kullanımı | Yorum |
 | :--- | :--- | :--- | :--- | :--- |
-| **IO\_RUN\_LATER** | 16 | 10 (%62.50) | 9 (%56.25) | G/Ç bittiğinde bile, o anda çalışan süreç devam eder. Bu, G/Ç ve CPU işinin daha az örtüşmesine ve CPU'nun boş kalma ihtimalinin artmasına neden olabilir. |
-| **IO\_RUN\_IMMEDIATE** | 15 | 10 (%66.67) | 8 (%53.33) | G/Ç bittiğinde kesinti ile hemen çalıştırılır. Bu, G/Ç cihazını daha çabuk yeniden meşgul eder, **G/Ç bekleme süresini maskeler** ve genellikle **daha düşük toplam süre** ve **daha yüksek CPU verimliliği** sağlar. |
+| **SWITCH_ON_IO + IO_RUN_LATER** | **15** | 9 (%60.0) | 12 (%80.0) | En verimli senaryo. Örtüşme (overlap) en iyi şekilde kullanıldı. |
+| **SWITCH_ON_IO + IO_RUN_IMMEDIATE** | **17** | 9 (%52.9) | 12 (%70.6) | PID 1'in G/Ç dönüşü PID 0'ı kestiği için PID 0'ın ikinci G/Ç'si gecikti. Bu nedenle toplam süre uzadı. |
+| **SWITCH_ON_END** | **24** | 9 (%37.5) | 15 (%62.5) | En kötü performans. İşlemler tamamen seri yapıldı, hiç örtüşme olmadı. |
 
-**Özet:** `IO_RUN_IMMEDIATE` genellikle `IO_RUN_LATER`'dan daha iyi performans gösterir, çünkü G/Ç cihazını hızlıca yeniden meşgul ederek, G/Ç bekleme süresinin diğer işlemler tarafından kullanılmasını maksimize eder.
+**Bilgi:**
+Bu spesifik rastgele senaryoda, `IO_RUN_LATER` davranışı `IO_RUN_IMMEDIATE` davranışından daha iyi performans göstermiştir. Ancak her iki `SWITCH_ON_IO` durumu da, G/Ç sırasında CPU'yu boş bırakan `SWITCH_ON_END` durumundan çok daha iyidir.
 
-#### 2\. `-S SWITCH_ON_IO` vs. `-S SWITCH_ON_END` (Varsayılan: `-I IO_RUN_LATER`)
+> **Özet:** G/Ç içeren iş yüklerinde, **`SWITCH_ON_IO`** bayrağı, G/Ç bekleme süresini diğer süreçlerle doldurarak CPU'nun boş kalmasını engellediği için **`SWITCH_ON_END`**'den daha iyi performans gösterir.
 
-| Davranış | Toplam Zaman | CPU Kullanımı | IO Kullanımı | Yorum |
-| :--- | :--- | :--- | :--- | :--- |
-| **SWITCH\_ON\_IO** | 16 | 10 (%62.50) | 9 (%56.25) | Süreç G/Ç başlattığında hemen anahtarlama yapılır. Bu, G/Ç bekleme süresini maskelemek için diğer `READY` süreçlerin çalışmasına olanak tanır. **Verimli çalışma** için tercih edilir. |
-| **SWITCH\_ON\_END** | 24 | 10 (%41.67) | 12 (%50.00) | Süreç **yalnızca** bittiğinde anahtarlama yapılır. Bir süreç G/Ç başlattığında (örneğin, PID 0'ın T=1'deki ilk G/Ç'si) `BLOCKED` olur, ancak sistem anahtarlama yapmaz ve **CPU G/Ç bitene kadar boş kalır**. Bu, **daha uzun toplam süre** ve **daha düşük CPU kullanımı** demektir. |
 
-**Özet:** G/Ç içeren iş yüklerinde, **`SWITCH_ON_IO`** her zaman **`SWITCH_ON_END`**'den daha iyi performans gösterir. `SWITCH_ON_IO`, G/Ç bekleme süresini diğer süreçlerle doldurarak CPU'nun boş kalmasını engeller. `SWITCH_ON_END` ise G/Ç beklentisi sırasında CPU'yu boşa çıkarır.
-
------
-
-**Sonuç olarak,** G/Ç ve CPU işlerinin birlikte olduğu sistemlerde, **`-S SWITCH_ON_IO`** ve **`-I IO_RUN_IMMEDIATE`** bayraklarının kullanılması, **kaynak kullanımını maksimize eder** (daha yüksek CPU verimliliği) ve **toplam süreyi minimize eder**. Bu iki davranış, G/Ç bekleme süresini diğer süreçlerin çalışmasıyla örtüştürerek sistem verimini artırır.
+> **Sonuç olarak,** G/Ç ve CPU işlerinin birlikte olduğu sistemlerde **`SWITCH_ON_IO`** kullanımı kritiktir. **`-I IO_RUN_IMMEDIATE`** ise genellikle G/Ç cihazını hızlıca tekrar meşgul ederek performansı artırsa da, **her zaman en iyi sonucu vermeyebilir.** Bazı durumlarda, çalışan bir süreci kesmek (preemption), genel akışı bozarak süreyi uzatabilir. Bu nedenle `IO_RUN_IMMEDIATE` genellikle tercih edilse de, iş yükünün karakteristiğine göre `IO_RUN_LATER` daha verimli olabilir.
