@@ -142,10 +142,8 @@ Trace kaydını satır satır takip ettiğimizde olaylar şöyle gelişiyor:
 Ancak trace çıktısında bu riski görmedik. Bunun nedeni **Interrupt Frequency (Kesme Sıklığı) = 10** olmasıdır.
 
 * **Neden Çalıştı?** Döngünün kritik işleri (kilidi al, artır, bırak) yaklaşık 8-9 komut sürüyor. Kesme sıklığı 10 olduğu için, her thread kendisine verilen sürede kilidi alıp, işini bitirip, **kilidi serbest bıraktıktan sonra** kesmeye uğruyor.
-* **Şans Faktörü:** Eğer `-i` değerini biraz değiştirseydiniz (örneğin 3 veya 4 yapsaydınız), kesme tam `test` (satır 1001) ile `mov` (satır 1003) arasına denk gelebilirdi. O zaman iki thread de aynı anda "Kilit boş!" diyerek içeri girer ve `count` değeri eksik çıkardı.
+* **Şans Faktörü:** Eğer `-i` değerini biraz değiştirseydik (örneğin 3 veya 4 yapsaydınız), kesme tam `test` (satır 1001) ile `mov` (satır 1003) arasına denk gelebilirdi. O zaman iki thread de aynı anda "Kilit boş!" diyerek içeri girer ve `count` değeri eksik çıkardı.
 
-
-### Soruya Verdiğiniz Cevabın Değerlendirilmesi
 
 * **Tahmin:** Sonuç 4 olmalı ama kod hatalı (atomik değil).
 * **Risk:** Yarış koşulu (Race Condition) oluşabilir.
